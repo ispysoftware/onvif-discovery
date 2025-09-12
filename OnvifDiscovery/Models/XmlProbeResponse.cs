@@ -61,6 +61,7 @@ public class Body
     ///     An array of probe matches
     /// </summary>
     [XmlArray(Namespace = "http://schemas.xmlsoap.org/ws/2005/04/discovery")]
+    [XmlArrayItem("ProbeMatch", Namespace = "http://schemas.xmlsoap.org/ws/2005/04/discovery")]
     public ProbeMatch[] ProbeMatches { get; init; } = Array.Empty<ProbeMatch>();
 }
 
