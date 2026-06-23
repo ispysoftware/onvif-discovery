@@ -15,7 +15,8 @@ internal static class DeviceFactory
             ParseModelFromScopes(probeMatch.Scopes),
             ParseMfrFromScopes(probeMatch.Scopes),
             remoteEndpoint.Address.ToString(),
-            ConvertToList(probeMatch.Scopes)
+            ConvertToList(probeMatch.Scopes),
+            probeMatch.EndpointReference?.Address ?? string.Empty
         );
 
     private static string ParseModelFromScopes(string scopes)

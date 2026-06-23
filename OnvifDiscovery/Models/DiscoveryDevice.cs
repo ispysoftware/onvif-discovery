@@ -9,7 +9,8 @@ public record DiscoveryDevice(
     string Model,
     string Mfr,
     string Address,
-    IEnumerable<string> Scopes
+    IEnumerable<string> Scopes,
+    string EndpointReference
 )
 {
     /// <summary>
@@ -42,4 +43,9 @@ public record DiscoveryDevice(
     ///     The device scopes
     /// </summary>
     public IEnumerable<string> Scopes { get; init; } = Scopes;
+
+    /// <summary>
+    ///     The WS-Discovery endpoint reference (typically a stable "urn:uuid:..." identifying the device)
+    /// </summary>
+    public string EndpointReference { get; init; } = EndpointReference;
 }
