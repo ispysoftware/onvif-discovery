@@ -38,6 +38,8 @@ internal class UdpClientFactory : IUdpClientFactory
         return clients;
     }
 
+    public IUdpClient CreateClient() => new UdpClientWrapper(new IPEndPoint(IPAddress.Any, 0));
+
     private static bool IsValidAdapter(NetworkInterface adapter) =>
         // Only select interfaces that are Ethernet type and support IPv4 (important to minimize waiting time)
         (adapter.NetworkInterfaceType == NetworkInterfaceType.Ethernet ||

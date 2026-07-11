@@ -20,6 +20,31 @@ internal sealed class UdpClientWrapper : IUdpClient
         {
             EnableBroadcast = true
         };
+
+        if (OperatingSystem.IsWindows())
+        {
+            // Unicast probes to dead addresses come back as ICMP port-unreachable, which Windows
+            // surfaces as a socket error on the NEXT ReceiveAsync — one dead target would then
+            // poison receives for live ones. SIO_UDP_CONNRESET disables that behaviour.
+            try
+            {
+                client.Client.IOControl(unchecked((int)0x9800000C) /* SIO_UDP_CONNRESET */,
+                    new byte[] { 0 }, null);
+            } catch
+            {
+                // best effort — receive loop also swallows per-datagram errors
+            }
+        }
+
+        try
+        {
+            // Default multicast TTL is 1; a slightly larger scope lets probes cross routers that
+            // are configured to forward multicast (IGMP proxy / PIM), which the default never can.
+            client.Client.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 4);
+        } catch
+        {
+            // not fatal — link-local discovery still works
+        }
     }
 
     public async Task<int> SendAsync(byte[] datagram, IPEndPoint endPoint, CancellationToken cancellationToken)

@@ -1,4 +1,5 @@
-﻿using System.Threading.Channels;
+﻿using System.Net;
+using System.Threading.Channels;
 using OnvifDiscovery.Models;
 
 namespace OnvifDiscovery;
@@ -15,6 +16,16 @@ public interface IDiscovery
     /// <param name="cancellationToken">A cancellation token</param>
     /// <returns></returns>
     IAsyncEnumerable<DiscoveryDevice> DiscoverAsync(int timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    ///     Discover onvif devices at specific addresses by probing them directly (unicast) —
+    ///     reaches devices on routable subnets that multicast discovery cannot.
+    /// </summary>
+    /// <param name="addresses">Candidate device addresses to probe</param>
+    /// <param name="timeout">A timeout in seconds to wait for onvif devices</param>
+    /// <param name="cancellationToken">A cancellation token</param>
+    IAsyncEnumerable<DiscoveryDevice> DiscoverUnicastAsync(IEnumerable<IPAddress> addresses, int timeout,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     ///     Discover new onvif cameras by passing a channel writer and a timeout

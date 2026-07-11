@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Sockets;
 using System.Threading.Channels;
 using OnvifDiscovery.Common;
 using OnvifDiscovery.Exceptions;
@@ -93,6 +94,93 @@ public class Discovery : IDiscovery
         }
 
         return devices;
+    }
+
+    /// <summary>
+    ///     Discover onvif devices at specific addresses by probing them directly (unicast).
+    ///     WS-Discovery multicast never crosses a router, but ONVIF devices also answer a probe sent
+    ///     unicast to udp/3702 — this reaches devices on routable subnets (other VLANs, behind a
+    ///     second router, over a VPN). Pass the candidate addresses to sweep.
+    /// </summary>
+    /// <param name="addresses">Candidate device addresses to probe (typically host addresses of routable subnets)</param>
+    /// <param name="timeout">A timeout in seconds to wait for onvif devices</param>
+    /// <param name="cancellationToken">A cancellation token</param>
+    public IAsyncEnumerable<DiscoveryDevice> DiscoverUnicastAsync(IEnumerable<IPAddress> addresses, int timeout,
+        CancellationToken cancellationToken = default)
+    {
+        var channel = Channel.CreateUnbounded<DiscoveryDevice>();
+        _ = DiscoverUnicast(channel.Writer, addresses, timeout, cancellationToken);
+        return channel.Reader.ReadAllAsync(cancellationToken);
+    }
+
+    private async Task DiscoverUnicast(ChannelWriter<DiscoveryDevice> channelWriter,
+        IEnumerable<IPAddress> addresses, int timeout, CancellationToken cancellationToken)
+    {
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+        try
+        {
+            var targets = addresses.Select(a => new IPEndPoint(a, Constants.WS_MULTICAST_PORT)).ToArray();
+            if (targets.Length == 0)
+            {
+                return;
+            }
+
+            using var client = clientFactory.CreateClient();
+            try
+            {
+                var messageId = Guid.NewGuid();
+                var discoveredDevicesAddresses = new ConcurrentDictionary<string, bool>();
+                var probeTask = SendUnicastProbeMessages(client, targets, messageId, cts.Token);
+                var receiveTask = ReceiveDiscoverMessages(channelWriter, client, discoveredDevicesAddresses,
+                    messageId, cts.Token);
+                await Task.WhenAll(probeTask, receiveTask);
+            } finally
+            {
+                client.Close();
+            }
+        } catch (Exception ex) when (ex is OperationCanceledException or TaskCanceledException &&
+                                     timeoutCts.IsCancellationRequested)
+        {
+            // If cancellation is from timeout source then just catch it
+        } catch (Exception ex)
+        {
+            channelWriter.TryComplete(ex);
+            throw;
+        } finally
+        {
+            channelWriter.TryComplete();
+        }
+    }
+
+    private static async Task SendUnicastProbeMessages(IUdpClient client, IPEndPoint[] targets, Guid messageId,
+        CancellationToken cancellationToken)
+    {
+        var datagram = WSProbeMessageBuilder.NewProbeMessage(messageId);
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var sent = 0;
+            foreach (var target in targets)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await client.SendAsync(datagram, target, cancellationToken);
+                } catch (SocketException)
+                {
+                    // target/network unreachable — keep sweeping the rest
+                }
+
+                // Pace the sweep so a large candidate list doesn't burst-flood the gateway
+                if (++sent % 128 == 0)
+                {
+                    await Task.Delay(50, cancellationToken);
+                }
+            }
+
+            // Re-probe until the timeout window closes: UDP is lossy and a busy camera can miss a pass
+            await Task.Delay(1000, cancellationToken);
+        }
     }
 
     private async Task DiscoverFromAllInterfaces(ChannelWriter<DiscoveryDevice> channelWriter, int timeout,
