@@ -131,7 +131,7 @@ public class Discovery : IDiscovery
             {
                 var messageId = Guid.NewGuid();
                 var discoveredDevicesAddresses = new ConcurrentDictionary<string, bool>();
-                var probeTask = SendUnicastProbeMessages(client, targets, messageId, cts.Token);
+                var probeTask = SendUnicastProbeMessages(client, targets, messageId, timeout, cts.Token);
                 var receiveTask = ReceiveDiscoverMessages(channelWriter, client, discoveredDevicesAddresses,
                     messageId, cts.Token);
                 await Task.WhenAll(probeTask, receiveTask);
@@ -153,12 +153,35 @@ public class Discovery : IDiscovery
         }
     }
 
+    private const int ProbePasses = 2;
+    private const int ProbeBatchSize = 32;
+    private const int InterPassDelayMs = 1000;
+
     private static async Task SendUnicastProbeMessages(IUdpClient client, IPEndPoint[] targets, Guid messageId,
-        CancellationToken cancellationToken)
+        int timeoutSeconds, CancellationToken cancellationToken)
     {
         var datagram = WSProbeMessageBuilder.NewProbeMessage(messageId);
-        while (!cancellationToken.IsCancellationRequested)
+
+        // Self-limiting pacing: every probe to a dead address costs the host an ARP/neighbour entry,
+        // and behind a user-space NAT (rootless podman/slirp4netns, pasta) a burst of a few hundred
+        // stalls the container's live RTSP streams long enough to drop them. So instead of a fixed
+        // rate, spread each pass across its share of the timeout window (two passes plus a gap plus
+        // reply time), with a floor so small lists are still spaced and a ceiling so a handful of
+        // targets doesn't crawl.
+        var batches = Math.Max(1, (targets.Length + ProbeBatchSize - 1) / ProbeBatchSize);
+        var perPassMs = Math.Max(0, timeoutSeconds * 1000 - InterPassDelayMs * (ProbePasses - 1)) * 0.35;
+        var batchDelayMs = Math.Clamp((int)(perPassMs / batches), 50, 500);
+
+        // Two passes only (UDP is lossy; a busy camera can miss one), then leave the socket to
+        // collect replies until the timeout window closes. Re-probing every second for the whole
+        // window multiplied a /24 sweep into thousands of datagrams.
+        for (var pass = 0; pass < ProbePasses && !cancellationToken.IsCancellationRequested; pass++)
         {
+            if (pass > 0)
+            {
+                await Task.Delay(InterPassDelayMs, cancellationToken);
+            }
+
             var sent = 0;
             foreach (var target in targets)
             {
@@ -171,15 +194,11 @@ public class Discovery : IDiscovery
                     // target/network unreachable — keep sweeping the rest
                 }
 
-                // Pace the sweep so a large candidate list doesn't burst-flood the gateway
-                if (++sent % 128 == 0)
+                if (++sent % ProbeBatchSize == 0 && sent < targets.Length)
                 {
-                    await Task.Delay(50, cancellationToken);
+                    await Task.Delay(batchDelayMs, cancellationToken);
                 }
             }
-
-            // Re-probe until the timeout window closes: UDP is lossy and a busy camera can miss a pass
-            await Task.Delay(1000, cancellationToken);
         }
     }
 
