@@ -94,7 +94,7 @@ public sealed class WsDiscoveryListener : IDisposable
                 var text = Encoding.UTF8.GetString(result.Buffer);
                 Diagnostic?.Invoke($"{result.RemoteEndPoint?.Address} {DescribeWsd(text)} ({result.Buffer.Length}b)");
                 // Only react to Hello (a device joined). Probe/ProbeMatches/Bye traffic on the group is ignored.
-                if (text.IndexOf("/Hello", StringComparison.OrdinalIgnoreCase) >= 0)
+                if (IsOnvifHello(text))
                     HelloReceived?.Invoke();
             }
             catch (OperationCanceledException)
@@ -112,6 +112,23 @@ public sealed class WsDiscoveryListener : IDisposable
                 catch (OperationCanceledException) { return; }
             }
         }
+    }
+
+    // The group is shared with every other WS-Discovery speaker on the LAN — Windows PCs (Function
+    // Discovery: wsdp:Device / pub:Computer), printers, NAS boxes. Windows re-sends Hello on every
+    // interface whenever any local address changes, so a flapping adapter produces a storm of them.
+    // Accept a Hello only if it names ONVIF (tdn:NetworkVideoTransmitter type, its onvif.org namespace,
+    // or onvif:// scopes). Types is optional in a Hello, so one that carries no Types at all is let
+    // through rather than risk missing a terse camera.
+    private static bool IsOnvifHello(string text)
+    {
+        if (text.IndexOf("/Hello", StringComparison.OrdinalIgnoreCase) < 0)
+            return false;
+        if (text.IndexOf("NetworkVideoTransmitter", StringComparison.OrdinalIgnoreCase) >= 0
+            || text.IndexOf("onvif", StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+        return text.IndexOf(":Types", StringComparison.OrdinalIgnoreCase) < 0
+               && text.IndexOf("<Types", StringComparison.OrdinalIgnoreCase) < 0;
     }
 
     // Cheap classification of a WS-Discovery datagram by its SOAP Action, for the diagnostic sink.
