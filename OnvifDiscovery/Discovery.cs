@@ -40,9 +40,18 @@ public class Discovery : IDiscovery
     public IAsyncEnumerable<DiscoveryDevice> DiscoverAsync(int timeout, CancellationToken cancellationToken = default)
     {
         var channel = Channel.CreateUnbounded<DiscoveryDevice>();
-        _ = DiscoverFromAllInterfaces(channel.Writer, timeout, cancellationToken);
+        Observe(DiscoverFromAllInterfaces(channel.Writer, timeout, cancellationToken));
         return channel.Reader.ReadAllAsync(cancellationToken);
     }
+
+    // The enumerable overloads hand a failure to the consumer by completing the channel with it, but the
+    // worker also rethrows, faulting a task nobody awaits - one UnobservedTaskException per failed scan
+    // (e.g. every poll on a machine with no usable network interface). Mark it observed; the channel
+    // already carries the error.
+    private static void Observe(Task task) =>
+        task.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
 
     /// <summary>
     ///     Discover new onvif cameras by passing a channel writer and a timeout
@@ -109,7 +118,7 @@ public class Discovery : IDiscovery
         CancellationToken cancellationToken = default)
     {
         var channel = Channel.CreateUnbounded<DiscoveryDevice>();
-        _ = DiscoverUnicast(channel.Writer, addresses, timeout, cancellationToken);
+        Observe(DiscoverUnicast(channel.Writer, addresses, timeout, cancellationToken));
         return channel.Reader.ReadAllAsync(cancellationToken);
     }
 
